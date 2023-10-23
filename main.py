@@ -33,26 +33,32 @@ Bot = commands.Bot(command_prefix='+', intents=Intents)
 async def join(ctx):
     if not ctx.message.author.voice:
         await ctx.send(f"{ctx.message.author.name} is not connected to a voice channel.")
+        return False
     else:
         channel = ctx.message.author.voice.channel
         await channel.connect()
+        return True
 
 
 @Bot.command(name='play', help='Searches for and plays the song')
 async def play(ctx, *args):
-    query = " ".join(args)
-    voice_client = ctx.voice_client
-    if not voice_client:
-        if not ctx.message.author.voice:
-            await ctx.send(f"{ctx.message.author.name} is not connected to a voice channel.")
-            return False
-        else:
-            voice_client = await ctx.message.author.voice.channel.connect()
+    if not ctx.voice_client:
+        if not await join(ctx):
+            return
 
+    vc = ctx.voice_client
+    if vc.is_playing():
+        await ctx.send("A song is already playing (and there is no queue implemented yet)")
+        return  # later on make it so that there is a queue
+
+    query = " ".join(args)
     with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
         info = ydl.extract_info(f"ytsearch:{query}", download=False)["entries"][0]
-        print("Link: " + info['url'])
-        voice_client.play(discord.FFmpegPCMAudio(executable=FFMPEG_PATH, source=info['url'], **ffmpeg_options))
+        await start_audio(vc, info['url'])
+
+
+async def start_audio(voice_client, link):
+    voice_client.play(discord.FFmpegPCMAudio(executable=FFMPEG_PATH, source=link, **ffmpeg_options))
 
 
 @Bot.command(name='leave', help='To make the bot leave the voice channel')

@@ -6,12 +6,17 @@ import yt_dlp
 
 YDL_OPTS = {
     'format': 'bestaudio',
-    'noplaylist': 'True',
+    'noplaylist': True,
+    'extract_audio': True,
     'postprocessors': [{
         'key': 'FFmpegExtractAudio',
         'preferredcodec': 'mp3',
         'preferredquality': '192',
     }]
+}
+ffmpeg_options = {
+    'options': '-vn',
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
 }
 
 # SETUP
@@ -34,7 +39,8 @@ async def join(ctx):
 
 
 @Bot.command(name='play', help='Searches for and plays the song')
-async def play(ctx, query):
+async def play(ctx, *args):
+    query = " ".join(args)
     voice_client = ctx.voice_client
     if not voice_client:
         if not ctx.message.author.voice:
@@ -45,8 +51,8 @@ async def play(ctx, query):
 
     with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
         info = ydl.extract_info(f"ytsearch:{query}", download=False)["entries"][0]
-        url2 = info['formats'][0]['url']
-        voice_client.play(discord.FFmpegPCMAudio(executable=FFMPEG_PATH, source=url2))
+        print("Link: " + info['url'])
+        voice_client.play(discord.FFmpegPCMAudio(executable=FFMPEG_PATH, source=info['url'], **ffmpeg_options))
 
 
 @Bot.command(name='leave', help='To make the bot leave the voice channel')
@@ -64,6 +70,12 @@ async def stop(ctx):
     if voice_client.is_playing():
         voice_client.stop()
         await voice_client.disconnect()
+
+
+@Bot.command
+async def test(ctx):
+    voice_client = ctx.voice_client
+    voice_client.play(discord.FFmpegPCMAudio(executable=FFMPEG_PATH, source="Fantasia.mp3", **ffmpeg_options))
 
 
 if __name__ == '__main__':

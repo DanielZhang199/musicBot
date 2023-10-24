@@ -52,7 +52,7 @@ async def play(ctx, *args):
             return
     vc = ctx.voice_client
     if len(args) == 0:
-        if current is None:
+        if vc.is_playing():
             await start_audio(ctx)
             return
         else:

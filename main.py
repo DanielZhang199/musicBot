@@ -2,36 +2,29 @@ import discord
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
-import yt_dlp
+from musicLoader import AudioQueue
+import asyncio
 
-# todo: autoplay, next command, and better queue implementation (create a queue object?)
+# todo: fix issue with adding to queue then starting playback
 
-YDL_OPTS = {
-    'format': 'bestaudio',
-    'noplaylist': True,
-    'extract_audio': True,
-    'postprocessors': [{
-        'key': 'FFmpegExtractAudio',
-        'preferredcodec': 'mp3',
-        'preferredquality': '192',
-    }]
-}
 ffmpeg_options = {
     'options': '-vn',
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10',
 }
 
-music_queue = []
-current = None
-
 # SETUP
+# Env
 load_dotenv()
 TOKEN = os.getenv("discord_token")
 FFMPEG_PATH = os.getenv("ffmpeg_path")
 
+# Discord.py
 Intents = discord.Intents().default()
 Intents.message_content = True
 Bot = commands.Bot(command_prefix='+', intents=Intents)
+
+# Music queue
+Queue = AudioQueue()
 
 
 @Bot.command(name='join', help='Tells the bot to join the voice channel')
@@ -40,68 +33,66 @@ async def join(ctx):
         await ctx.send(f"{ctx.message.author.name} is not connected to a voice channel.")
         return False
     else:
-        channel = ctx.message.author.voice.channel
-        await channel.connect()
+        await ctx.message.author.voice.channel.connect()
         return True
 
 
-@Bot.command(name='play', help='Searches for and plays the song')
+@Bot.command(name='play', help='Adds the song to front of queue, starts playback')
 async def play(ctx, *args):
     if not ctx.voice_client:
         if not await join(ctx):
             return
-    vc = ctx.voice_client
+
     if len(args) == 0:
-        if vc.is_playing():
-            await start_audio(ctx)
-            return
+        if ctx.voice_client.is_playing():
+            await ctx.send("Already playing a song!")
         else:
-            await ctx.send(f"Already playing **{current['title']}**!")
-
-    info = add_to_queue(" ".join(args), front=True)
-    if not vc.is_playing():
-        await start_audio(ctx)
-        await ctx.send(f"Playing **{info['title']}**")
+            await start_audio(ctx)
     else:
-        await ctx.send(f"Added **{info['title']}** to queue")
+        name = Queue.add_by_query(" ".join(args), front=True)
+        if not ctx.voice_client.is_playing():
+            await start_audio(ctx)
+        else:
+            await ctx.send(f"Added **{name}** to front of queue")
 
 
-@Bot.command(name='queue', help="Adds a song to the queue")
-async def queue(ctx, *args):
-    if len(args) == 0:
-        await show_queue(ctx)
-        return
-    info = add_to_queue(" ".join(args))
-    await ctx.send(f"Added **{info['title']}** to queue")
+@Bot.command(name='add', help='Searches for and adds the song to queue')
+async def add(ctx, *args):
+    name = Queue.add_by_query(" ".join(args))
+    await ctx.send(f"Added **{name}** to queue")
 
 
-async def show_queue(ctx):
-    string = ', '.join((i['title'] for i in music_queue))
+@Bot.command(name='queue', help="Displays the queue")
+async def queue(ctx):
+    string = ', '.join((i['title'] for i in Queue.current_queue()))
     await ctx.send("Current queue: " + string)
 
 
-def add_to_queue(query, front=False):
-    with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-        info = ydl.extract_info(f"ytsearch:{query}", download=False)["entries"][0]
-    if front:
-        music_queue.insert(0, info)
-    else:
-        music_queue.append(info)
-    return info
+@Bot.command(name='skip', help="Skips current song")
+async def skip(ctx):
+    ctx.voice_client.stop()
+    await start_audio(ctx)
 
 
 async def start_audio(ctx):
-    if len(music_queue) == 0:
+    if Queue.size() == 0:
         await ctx.send("No songs in queue!")
-        return
-    global current
-    current = music_queue.pop(0)
-    ctx.voice_client.play(discord.FFmpegPCMAudio(executable=FFMPEG_PATH, source=current['url'], **ffmpeg_options))
+    else:
+        ctx.voice_client.play(discord.FFmpegPCMAudio(executable=FFMPEG_PATH, source=Queue.pop_next()['url'],
+                                                     **ffmpeg_options), after=play_next(ctx))
+        await ctx.send(f"Now playing: **{Queue.now_playing()}**")
+
+
+def play_next(ctx):  # to continue playing while queue still not empty
+    if Queue.size() > 0:
+        ctx.voice_client.play(discord.FFmpegPCMAudio(executable=FFMPEG_PATH, source=Queue.pop_next()['url'],
+                                                     **ffmpeg_options), after=lambda e: play_next(ctx))
+        asyncio.run_coroutine_threadsafe(ctx.send("No more songs in queue."), Bot.loop)
 
 
 @Bot.command(name='leave', help='To make the bot leave the voice channel')
 async def leave(ctx):
-    voice_client = ctx.message.guild.voice_client
+    voice_client = ctx.voice_client
     if voice_client.is_connected():
         await voice_client.disconnect()
     else:
@@ -114,12 +105,8 @@ async def stop(ctx):
     if voice_client.is_playing():
         voice_client.stop()
         await voice_client.disconnect()
-
-
-@Bot.command
-async def test(ctx):
-    voice_client = ctx.voice_client
-    voice_client.play(discord.FFmpegPCMAudio(executable=FFMPEG_PATH, source="Fantasia.mp3", **ffmpeg_options))
+    else:
+        await leave(ctx)
 
 
 if __name__ == '__main__':
